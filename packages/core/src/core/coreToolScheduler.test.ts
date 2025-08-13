@@ -9,7 +9,6 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   CoreToolScheduler,
   ToolCall,
-  ValidatingToolCall,
   convertToFunctionResponse,
 } from './coreToolScheduler.js';
 import {
@@ -19,7 +18,7 @@ import {
   ToolConfirmationPayload,
   ToolResult,
   Config,
-  Icon,
+  Kind,
   ApprovalMode,
 } from '../index.js';
 import { Part, PartListUnion } from '@google/genai';
@@ -54,7 +53,9 @@ class MockModifiableTool
     };
   }
 
-  async shouldConfirmExecute(): Promise<ToolCallConfirmationDetails | false> {
+  override async shouldConfirmExecute(): Promise<
+    ToolCallConfirmationDetails | false
+  > {
     if (this.shouldConfirm) {
       return {
         type: 'edit',
@@ -121,8 +122,6 @@ describe('CoreToolScheduler', () => {
     abortController.abort();
     await scheduler.schedule([request], abortController.signal);
 
-    const _waitingCall = onToolCallsUpdate.mock
-      .calls[1][0][0] as ValidatingToolCall;
     const confirmationDetails = await mockTool.shouldConfirmExecute(
       {},
       abortController.signal,
@@ -389,12 +388,12 @@ describe('CoreToolScheduler edit cancellation', () => {
           'mockEditTool',
           'mockEditTool',
           'A mock edit tool',
-          Icon.Pencil,
+          Kind.Edit,
           {},
         );
       }
 
-      async shouldConfirmExecute(
+      override async shouldConfirmExecute(
         _params: Record<string, unknown>,
         _abortSignal: AbortSignal,
       ): Promise<ToolCallConfirmationDetails | false> {
@@ -590,5 +589,197 @@ describe('CoreToolScheduler YOLO mode', () => {
     if (completedCall.status === 'success') {
       expect(completedCall.response.resultDisplay).toBe('Tool executed');
     }
+  });
+});
+
+describe('CoreToolScheduler request queueing', () => {
+  it('should queue a request if another is running', async () => {
+    let resolveFirstCall: (result: ToolResult) => void;
+    const firstCallPromise = new Promise<ToolResult>((resolve) => {
+      resolveFirstCall = resolve;
+    });
+
+    const mockTool = new MockTool();
+    mockTool.executeFn.mockImplementation(() => firstCallPromise);
+    const declarativeTool = mockTool;
+
+    const toolRegistry = {
+      getTool: () => declarativeTool,
+      getToolByName: () => declarativeTool,
+      getFunctionDeclarations: () => [],
+      tools: new Map(),
+      discovery: {} as any,
+      registerTool: () => {},
+      getToolByDisplayName: () => declarativeTool,
+      getTools: () => [],
+      discoverTools: async () => {},
+      getAllTools: () => [],
+      getToolsByServer: () => [],
+    };
+
+    const onAllToolCallsComplete = vi.fn();
+    const onToolCallsUpdate = vi.fn();
+
+    const mockConfig = {
+      getSessionId: () => 'test-session-id',
+      getUsageStatisticsEnabled: () => true,
+      getDebugMode: () => false,
+      getApprovalMode: () => ApprovalMode.YOLO, // Use YOLO to avoid confirmation prompts
+    } as unknown as Config;
+
+    const scheduler = new CoreToolScheduler({
+      config: mockConfig,
+      toolRegistry: Promise.resolve(toolRegistry as any),
+      onAllToolCallsComplete,
+      onToolCallsUpdate,
+      getPreferredEditor: () => 'vscode',
+      onEditorClose: vi.fn(),
+    });
+
+    const abortController = new AbortController();
+    const request1 = {
+      callId: '1',
+      name: 'mockTool',
+      args: { a: 1 },
+      isClientInitiated: false,
+      prompt_id: 'prompt-1',
+    };
+    const request2 = {
+      callId: '2',
+      name: 'mockTool',
+      args: { b: 2 },
+      isClientInitiated: false,
+      prompt_id: 'prompt-2',
+    };
+
+    // Schedule the first call, which will pause execution.
+    scheduler.schedule([request1], abortController.signal);
+
+    // Wait for the first call to be in the 'executing' state.
+    await vi.waitFor(() => {
+      const calls = onToolCallsUpdate.mock.calls.at(-1)?.[0] as ToolCall[];
+      expect(calls?.[0]?.status).toBe('executing');
+    });
+
+    // Schedule the second call while the first is "running".
+    const schedulePromise2 = scheduler.schedule(
+      [request2],
+      abortController.signal,
+    );
+
+    // Ensure the second tool call hasn't been executed yet.
+    expect(mockTool.executeFn).toHaveBeenCalledTimes(1);
+    expect(mockTool.executeFn).toHaveBeenCalledWith({ a: 1 });
+
+    // Complete the first tool call.
+    resolveFirstCall!({
+      llmContent: 'First call complete',
+      returnDisplay: 'First call complete',
+    });
+
+    // Wait for the second schedule promise to resolve.
+    await schedulePromise2;
+
+    // Wait for the second call to be in the 'executing' state.
+    await vi.waitFor(() => {
+      const calls = onToolCallsUpdate.mock.calls.at(-1)?.[0] as ToolCall[];
+      expect(calls?.[0]?.status).toBe('executing');
+    });
+
+    // Now the second tool call should have been executed.
+    expect(mockTool.executeFn).toHaveBeenCalledTimes(2);
+    expect(mockTool.executeFn).toHaveBeenCalledWith({ b: 2 });
+
+    // Let the second call finish.
+    const secondCallResult = {
+      llmContent: 'Second call complete',
+      returnDisplay: 'Second call complete',
+    };
+    // Since the mock is shared, we need to resolve the current promise.
+    // In a real scenario, a new promise would be created for the second call.
+    resolveFirstCall!(secondCallResult);
+
+    // Wait for the second completion.
+    await vi.waitFor(() => {
+      expect(onAllToolCallsComplete).toHaveBeenCalledTimes(2);
+    });
+
+    // Verify the completion callbacks were called correctly.
+    expect(onAllToolCallsComplete.mock.calls[0][0][0].status).toBe('success');
+    expect(onAllToolCallsComplete.mock.calls[1][0][0].status).toBe('success');
+  });
+
+  it('should handle two synchronous calls to schedule', async () => {
+    const mockTool = new MockTool();
+    const declarativeTool = mockTool;
+    const toolRegistry = {
+      getTool: () => declarativeTool,
+      getToolByName: () => declarativeTool,
+      getFunctionDeclarations: () => [],
+      tools: new Map(),
+      discovery: {} as any,
+      registerTool: () => {},
+      getToolByDisplayName: () => declarativeTool,
+      getTools: () => [],
+      discoverTools: async () => {},
+      getAllTools: () => [],
+      getToolsByServer: () => [],
+    };
+
+    const onAllToolCallsComplete = vi.fn();
+    const onToolCallsUpdate = vi.fn();
+
+    const mockConfig = {
+      getSessionId: () => 'test-session-id',
+      getUsageStatisticsEnabled: () => true,
+      getDebugMode: () => false,
+      getApprovalMode: () => ApprovalMode.YOLO,
+    } as unknown as Config;
+
+    const scheduler = new CoreToolScheduler({
+      config: mockConfig,
+      toolRegistry: Promise.resolve(toolRegistry as any),
+      onAllToolCallsComplete,
+      onToolCallsUpdate,
+      getPreferredEditor: () => 'vscode',
+      onEditorClose: vi.fn(),
+    });
+
+    const abortController = new AbortController();
+    const request1 = {
+      callId: '1',
+      name: 'mockTool',
+      args: { a: 1 },
+      isClientInitiated: false,
+      prompt_id: 'prompt-1',
+    };
+    const request2 = {
+      callId: '2',
+      name: 'mockTool',
+      args: { b: 2 },
+      isClientInitiated: false,
+      prompt_id: 'prompt-2',
+    };
+
+    // Schedule two calls synchronously.
+    const schedulePromise1 = scheduler.schedule(
+      [request1],
+      abortController.signal,
+    );
+    const schedulePromise2 = scheduler.schedule(
+      [request2],
+      abortController.signal,
+    );
+
+    // Wait for both promises to resolve.
+    await Promise.all([schedulePromise1, schedulePromise2]);
+
+    // Ensure the tool was called twice with the correct arguments.
+    expect(mockTool.executeFn).toHaveBeenCalledTimes(2);
+    expect(mockTool.executeFn).toHaveBeenCalledWith({ a: 1 });
+    expect(mockTool.executeFn).toHaveBeenCalledWith({ b: 2 });
+
+    // Ensure completion callbacks were called twice.
+    expect(onAllToolCallsComplete).toHaveBeenCalledTimes(2);
   });
 });
