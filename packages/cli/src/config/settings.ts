@@ -53,12 +53,6 @@ export interface CheckpointingSettings {
   enabled?: boolean;
 }
 
-export interface A2AServerConfig {
-  url: string;
-  accessToken?: string;
-  agent_card_path?: string;
-}
-
 export interface SummarizeToolOutputSettings {
   tokenBudget?: number;
 }

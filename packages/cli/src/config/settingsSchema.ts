@@ -10,6 +10,7 @@ import {
   TelemetrySettings,
   AuthType,
   ChatCompressionSettings,
+  A2AServerConfig,
 } from '@google/gemini-cli-core';
 import { CustomTheme } from '../ui/themes/theme.js';
 
@@ -266,6 +267,15 @@ export const SETTINGS_SCHEMA = {
     default: false,
     description: 'Disable automatic updates',
     showInDialog: true,
+  },
+
+  a2aServers: {
+    type: 'object',
+    label: 'A2A Servers',
+    category: 'Placeholder',
+    default: undefined as A2AServerConfig[] | undefined,
+    description: 'remote mcp servers',
+    requiresRestart: false,
   },
 
   selectedAuthType: {

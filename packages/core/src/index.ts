@@ -97,3 +97,5 @@ export { OAuthUtils } from './mcp/oauth-utils.js';
 export * from './telemetry/index.js';
 export { sessionId } from './utils/session.js';
 export * from './utils/browser.js';
+
+export * from './a2a/types.js';
