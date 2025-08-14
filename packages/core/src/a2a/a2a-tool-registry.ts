@@ -6,7 +6,7 @@
 
 import { z } from 'zod';
 import { A2AClientManager } from './a2a-client.js';
-import { extractMessageText, extractTaskText, textResponse } from './utils.js';
+import { extractMessageText, extractTaskText, textResponse, extractA2AEventStream, A2AStreamEventData } from './utils.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AgentCard } from '@a2a-js/sdk';
 
@@ -101,7 +101,7 @@ export class A2AToolRegistry {
             agentName,
             args.message,
           );
-          const events: unknown[] = [];
+          const events: A2AStreamEventData[] = [];
           for await (const event of stream) {
             events.push(event);
           }
@@ -109,7 +109,7 @@ export class A2AToolRegistry {
             content: [
               {
                 type: 'text',
-                text: events.map((event) => JSON.stringify(event)).join('\n'),
+                text: events.map((event) => extractA2AEventStream(event)).join('\n'),
               },
             ],
           };

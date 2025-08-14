@@ -10,10 +10,6 @@ import {
   GetTaskResponse,
   MessageSendParams,
   SendMessageResponse,
-  Message,
-  Task,
-  TaskStatusUpdateEvent,
-  TaskArtifactUpdateEvent,
   // SendStreamingMessageResponse
 } from '@a2a-js/sdk';
 import {
@@ -25,10 +21,7 @@ import {
 } from '@a2a-js/sdk/client';
 import { extractContextId } from './utils.js';
 import { v4 as uuidv4 } from 'uuid';
-
-// TODO remove, redefining
-type A2AStreamEventData = Message | Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent;
-
+import { A2AStreamEventData } from './utils.js';
 
 const AGENT_CARD_WELL_KNOWN_PATH = '/.well-known/agent-card.json';
 
@@ -205,11 +198,12 @@ export class A2AClientManager {
       );
     }
 
-    const taskId = uuidv4();
-    this.taskMap.set(
-      agentName,
-      (this.taskMap.get(agentName) || new Set()).add(taskId),
-    );
+    // TODO: figure out taskId vs contextId. For gemini-cli-a2a, need to treat taskId as contextId
+    // const taskId = uuidv4();
+    // this.taskMap.set(
+    //   agentName,
+    //   (this.taskMap.get(agentName) || new Set()).add(taskId),
+    // );
 
     const messageParams: MessageSendParams = {
       message: {
@@ -222,7 +216,7 @@ export class A2AClientManager {
             text: message,
           },
         ],
-        taskId,
+        // taskId,
       },
       configuration: {
         acceptedOutputModes: ['text'],
@@ -237,11 +231,14 @@ export class A2AClientManager {
     // TODO: This should be SendStreamingMessageResponse but it is A2AStreamEventData
     const stream = await a2aClient.sendMessageStream(messageParams);
 
+    console.error("after stream", stream)
+
     for await (const event of stream) {
       console.error("stream event", event)
       if (event) {
         const newContextId = event.contextId;
         if (newContextId) this.contextMap.set(agentName, newContextId);
+        // Store TaskId.
       }
       yield event;
     }
