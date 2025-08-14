@@ -10,16 +10,18 @@ import {
   GetTaskResponse,
   MessageSendParams,
   SendMessageResponse,
+  // SendStreamingMessageResponse
 } from '@a2a-js/sdk';
 import {
   A2AClient,
   A2AClientOptions,
-  AuthenticationHandler,
-  HttpHeaders,
-  AuthHandlingFetch,
+  // AuthenticationHandler,
+  // HttpHeaders,
+  // AuthHandlingFetch,
 } from '@a2a-js/sdk/client';
 import { extractContextId } from './utils.js';
 import { v4 as uuidv4 } from 'uuid';
+import { A2AStreamEventData } from './utils.js';
 
 const AGENT_CARD_WELL_KNOWN_PATH = '/.well-known/agent-card.json';
 
@@ -68,16 +70,43 @@ export class A2AClientManager {
       agentCardPath: agent_card_path || AGENT_CARD_WELL_KNOWN_PATH,
     };
 
-    if (token) {
-      const staticTokenHandler = new StaticBearerTokenAuth(token);
-      options.fetchImpl = new AuthHandlingFetch(
-        fetch,
-        staticTokenHandler,
-      ) as unknown as typeof fetch;
-    }
+    // Create a single, unified fetch wrapper to handle all header modifications.
+    const customFetch: typeof fetch = (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const headers = new Headers(init?.headers);
+
+      if (headers.get('Accept') === 'text/event-stream') {
+        headers.set('Cache-Control', 'no-cache');
+        headers.set('Connection', 'keep-alive');
+      }
+
+      if (token) {
+        headers.set('Authorization', `Bearer ${token}`);
+      }
+
+      const newInit = { ...init, headers };
+
+      // Convert Headers object to a plain object for accurate logging.
+      const headersForLogging: Record<string, string> = {};
+      headers.forEach((value, key) => {
+        headersForLogging[key] = value;
+      });
+      console.error(
+        'Final Fetch Init:',
+        JSON.stringify({ ...newInit, headers: headersForLogging }, null, 2),
+      );
+
+      return fetch(input, newInit);
+    };
+
+    options.fetchImpl = customFetch;
 
     const a2aClient = new A2AClient(url, options);
     const agentCard = await a2aClient.getAgentCard();
+
+    console.error('Loaded agent card:', JSON.stringify(agentCard));
 
     if (this.registeredAgents.has(agentCard.name)) {
       throw Error(`Agent with name ${agentCard.name} is already loaded.`);
@@ -153,6 +182,69 @@ export class A2AClientManager {
   }
 
   /**
+   * Connects to an agent and sends a message, handling the streaming response.
+   * @param agentName The name of the agent.
+   * @param message The message to send.
+   * @returns An async generator that yields events from the stream.
+   */
+  async *sendMessageStreaming(
+    agentName: string,
+    message: string,
+  ): AsyncGenerator<A2AStreamEventData> {
+    const a2aClient = this.registeredAgents.get(agentName);
+    if (!a2aClient) {
+      throw new Error(
+        `Agent with name ${agentName} is not registered. Please run load_agent first.`,
+      );
+    }
+
+    // TODO: figure out taskId vs contextId. For gemini-cli-a2a, need to treat taskId as contextId
+    // const taskId = uuidv4();
+    // this.taskMap.set(
+    //   agentName,
+    //   (this.taskMap.get(agentName) || new Set()).add(taskId),
+    // );
+
+    const messageParams: MessageSendParams = {
+      message: {
+        kind: 'message',
+        role: 'user',
+        messageId: uuidv4(),
+        parts: [
+          {
+            kind: 'text',
+            text: message,
+          },
+        ],
+        // taskId,
+      },
+      configuration: {
+        acceptedOutputModes: ['text'],
+      }
+    };
+
+    console.error('messageParams', JSON.stringify(messageParams))
+
+    const contextId = this.contextMap.get(agentName);
+    if (contextId) messageParams.message.contextId = contextId;
+
+    // TODO: This should be SendStreamingMessageResponse but it is A2AStreamEventData
+    const stream = await a2aClient.sendMessageStream(messageParams);
+
+    console.error("after stream", stream)
+
+    for await (const event of stream) {
+      console.error("stream event", event)
+      if (event) {
+        const newContextId = event.contextId;
+        if (newContextId) this.contextMap.set(agentName, newContextId);
+        // Store TaskId.
+      }
+      yield event;
+    }
+  }
+
+  /**
    * Retrieves a task by its ID.
    * @param taskId The ID of the task.
    * @returns The task object.
@@ -203,28 +295,28 @@ export class A2AClientManager {
   }
 }
 
-// TODO: contribute this to a2a-js/sdk
-class StaticBearerTokenAuth implements AuthenticationHandler {
-  private token: string;
+// // TODO: contribute this to a2a-js/sdk
+// class StaticBearerTokenAuth implements AuthenticationHandler {
+//   private token: string;
 
-  constructor(token: string) {
-    this.token = token;
-  }
+//   constructor(token: string) {
+//     this.token = token;
+//   }
 
-  headers(): HttpHeaders {
-    return {
-      Authorization: `Bearer ${this.token}`,
-    };
-  }
+//   headers(): HttpHeaders {
+//     return {
+//       Authorization: `Bearer ${this.token}`,
+//     };
+//   }
 
-  shouldRetryWithHeaders(
-    _req: RequestInit,
-    _res: Response,
-  ): Promise<HttpHeaders | undefined> {
-    return Promise.resolve(undefined);
-  }
+//   shouldRetryWithHeaders(
+//     _req: RequestInit,
+//     _res: Response,
+//   ): Promise<HttpHeaders | undefined> {
+//     return Promise.resolve(undefined);
+//   }
 
-  onSuccess(_headers: HttpHeaders): Promise<void> {
-    return Promise.resolve();
-  }
-}
+//   onSuccess(_headers: HttpHeaders): Promise<void> {
+//     return Promise.resolve();
+//   }
+// }

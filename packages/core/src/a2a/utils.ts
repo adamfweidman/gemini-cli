@@ -14,7 +14,11 @@ import {
   Task,
   TextPart,
   SendMessageResponse,
+  TaskStatusUpdateEvent,
+  TaskArtifactUpdateEvent,
 } from '@a2a-js/sdk';
+
+export type A2AStreamEventData = Message | Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent;
 
 export const textResponse = (message: string): CallToolResult => ({
   content: [
@@ -83,9 +87,9 @@ export function extractTaskText(task: Task): string {
     output += `Message: ${messageText}\n`;
   }
 
-  if (task.history && task.history.length > 0) {
-    output += '\nHistory:\n ${task.history.length} messages\n';
-  }
+  // if (task.history && task.history.length > 0) {
+  //   output += `\nHistory:\n ${task.history.length} messages\n`;
+  // }
 
   return output;
 }
@@ -95,4 +99,27 @@ export function extractContextId(
 ): string | undefined {
   if ('error' in sendMessageResponse) return undefined;
   return sendMessageResponse.result.contextId;
+}
+
+let i = 0
+
+export function extractA2AEventStream(event: A2AStreamEventData): string {
+  i++
+  switch (event.kind) {
+    case 'message':
+      console.error("message", i, JSON.stringify(event))
+      return `Message: ${extractMessageText(event)}`;
+    case 'task':
+      console.error("task", i, JSON.stringify(event))
+      return `Task Update: ${extractTaskText(event)}`;
+    case 'status-update':
+      console.error("status-update", i, JSON.stringify(event))
+      const text = extractMessageText(event.status.message);
+      return `Status Update: ${text ? text : event.status.state}\n`;
+    case 'artifact-update':
+      console.error("artifact-update", i,  JSON.stringify(event))
+      return `Artifact Update: ${event.artifact.name}\n`;
+    default:
+      return `Unknown event: ${JSON.stringify(event)}`;
+  }
 }

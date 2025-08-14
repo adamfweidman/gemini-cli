@@ -373,6 +373,8 @@ export async function loadCliConfig(
   let mcpServers = mergeMcpServers(settings, activeExtensions);
   const a2aServers = settings.a2aServers;
 
+  console.log("a2aServers", JSON.stringify(a2aServers))
+
   if (a2aServers && a2aServers.length > 0) {
     if (!mcpServers['a2a-server']) {
       // Avoid overwriting if user defined manually

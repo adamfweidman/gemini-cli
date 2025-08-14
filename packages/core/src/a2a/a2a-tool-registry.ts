@@ -6,12 +6,16 @@
 
 import { z } from 'zod';
 import { A2AClientManager } from './a2a-client.js';
-import { extractMessageText, extractTaskText, textResponse } from './utils.js';
+import { extractMessageText, extractTaskText, textResponse, extractA2AEventStream, A2AStreamEventData } from './utils.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AgentCard } from '@a2a-js/sdk';
 
 // Zod Schemas for dynamically registered tools
 export const AgentSendMessageInputSchema = z.object({
+  message: z.string().describe('The text message to send to the agent.'),
+});
+
+export const AgentSendMessageStreamingInputSchema = z.object({
   message: z.string().describe('The text message to send to the agent.'),
 });
 
@@ -79,6 +83,46 @@ export class A2AToolRegistry {
           return textResponse(
             `Failed to send message to ${agentName}: ${error.message}`,
           );
+        }
+      },
+    );
+
+    // Register sendMessageStreaming for the agent
+    this.server.registerTool(
+      `${sanitizedAgentName}_sendMessageStreaming`,
+      {
+        description: `Sends a message to the ${agentName} agent and streams the response.`,
+        inputSchema: AgentSendMessageStreamingInputSchema.shape,
+      },
+      async (args: z.infer<typeof AgentSendMessageStreamingInputSchema>) => {
+        try {
+          console.error("sending message streaming")
+          const stream = this.clientManager.sendMessageStreaming(
+            agentName,
+            args.message,
+          );
+          const events: A2AStreamEventData[] = [];
+          for await (const event of stream) {
+            events.push(event);
+          }
+          return {
+            content: [
+              {
+                type: 'text',
+                text: events.map((event) => extractA2AEventStream(event)).join('\n'),
+              },
+            ],
+          };
+        } catch (e) {
+          const error = e as Error;
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Failed to stream message to ${agentName}: ${error.message}`,
+              },
+            ],
+          };
         }
       },
     );
