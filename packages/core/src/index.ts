@@ -98,4 +98,4 @@ export * from './telemetry/index.js';
 export { sessionId } from './utils/session.js';
 export * from './utils/browser.js';
 
-export * from './a2a/types.js';
+export * from './mcp-a2a/types.js';
